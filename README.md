@@ -28,4 +28,3 @@ tidyverse (dplyr, ggplot2, lubridate, tidyr)
 
 arules and arulesViz (for Market Basket Analysis)
 
-How to View the Analysis The full, interactive analysis report can be viewed directly in your browser by clicking the link below.
