@@ -1,0 +1,158 @@
+---
+title: "Online Retail Analysis"
+author: "Dorothy Worbie"
+output: html_document
+fontsize: 10pt
+---
+
+# 1. Data Cleaning and Preparation
+
+### Load libraries
+- library(readr)
+- library(dplyr)
+- library(lubridate)
+- library(stringr)
+- library(scales)
+- library(ggplot2)
+
+### Import and clean the dataset
+online_retail_clean <- read_csv("Online Retail.csv", trim_ws = TRUE) %>%
+  filter(Quantity > 0, UnitPrice > 0) %>%
+  filter(!str_detect(InvoiceNo, "^C")) %>%
+  drop_na(CustomerID) %>%
+  mutate(TotalSales = Quantity * UnitPrice,
+         InvoiceDate = dmy_hm(InvoiceDate))
+
+# 2. Exploratory Data Analysis (EDA)
+
+### Sales Trends
+monthly_sales <- online_retail_clean %>%
+  mutate(InvoiceMonth = floor_date(InvoiceDate, "month")) %>%
+  group_by(InvoiceMonth) %>%
+  summarise(MonthlyRevenue = sum(TotalSales, na.rm = TRUE)) %>%
+  ungroup()
+  
+## Plotting
+ggplot(monthly_sales, aes(x = InvoiceMonth, y = MonthlyRevenue)) +
+  geom_line(color = "steelblue") +
+  geom_point(color = "steelblue") +
+  labs(title = "Monthly Revenue Trend", x = "Month", y = "Revenue ($)") +
+  theme_minimal() +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  scale_y_continuous(labels = scales::comma)
+
+### Top Products and Countries
+top_10_countries <- online_retail_clean %>%
+  group_by(Country) %>%
+  summarise(TotalRevenue = sum(TotalSales, na.rm = TRUE)) %>%
+  arrange(desc(TotalRevenue)) %>%
+  head(10)
+
+top_products <- online_retail_clean %>%
+  group_by(Description) %>%
+  summarise(TotalRevenue = sum(TotalSales, na.rm = TRUE)) %>%
+  arrange(desc(TotalRevenue)) %>%
+  head(10)
+
+### Plotting
+plot_countries <- ggplot(top_10_countries, aes(x = reorder(Country, TotalRevenue), y = TotalRevenue)) +
+  geom_col(fill = "darkgreen") +
+  labs(title = "Top 10 Countries by Revenue", x = "Country", y = "Total Revenue") +
+  coord_flip() +
+  theme_minimal()
+
+plot_products <- ggplot(top_products, aes(x = reorder(Description, TotalRevenue), y = TotalRevenue)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Top 10 Products by Revenue", x = "Description", y = "Total Revenue") +
+  coord_flip() +
+  theme_minimal()
+
+plot_countries
+plot_products
+
+### Find the top product in each top country
+top_product_by_country <- online_retail_clean %>%
+  filter(Country %in% top_10_countries$Country) %>%
+  group_by(Country, Description) %>%
+  summarise(TotalRevenue = sum(TotalSales, na.rm = TRUE)) %>%
+  slice_max(order_by = TotalRevenue, n = 1) %>%
+  ungroup()
+
+ggplot(top_product_by_country, aes(x = reorder(Description, TotalRevenue), y = TotalRevenue, fill = Country)) +
+  geom_col(position = "dodge") +
+  labs(title = "Top Product by Revenue in Each Top Country", x = "Product", y = "Total Revenue", fill = "Country") +
+  coord_flip() +
+  theme_minimal()
+
+# 3. Customer Segmentation (RFM Analysis)
+
+customer_sales_summary <- online_retail_clean %>%
+  group_by(CustomerID) %>%
+  summarise(
+    CLV = sum(TotalSales, na.rm = TRUE),
+    OrderFrequency = n_distinct(InvoiceNo),
+    Recency = max(InvoiceDate)
+  ) %>%
+  ungroup()
+
+customer_rfm_score <- customer_sales_summary %>% 
+  mutate(
+    RecencyDays = as.numeric(as.Date("2011-12-09") - as.Date(Recency)),
+    R_Score = ntile(desc(RecencyDays), 5),
+    F_Score = ntile(OrderFrequency, 5),
+    M_Score = ntile(CLV, 5)
+  ) %>%
+  mutate(RFM_Score = paste0(R_Score, F_Score, M_Score)) %>%
+  mutate(Segment = case_when(
+    # High Value: Recent (R=4-5), Frequent (F=4-5), and High Spend (M=4-5)
+    str_detect(RFM_Score, "^[4-5][4-5][4-5]") ~ "High Value",
+    # Loyal Customers: Less recent (R=3) but still frequent and high spend
+    str_detect(RFM_Score, "^[3][4-5][4-5]") ~ "Loyal Customers",
+    # Big Spenders: Low Recency and Frequency but high Monetary value (M=4-5)
+    str_detect(RFM_Score, "^[1-2][1-3][4-5]") ~ "Big Spenders",
+    # At-Risk: Not recent (R=1-2) but were frequent and high spenders in the past
+    str_detect(RFM_Score, "^[1-2][4-5][4-5]") ~ "At-Risk",
+    # Hibernating: Low scores across the board (R=1-2, F=1-2, M=1-2)
+    str_detect(RFM_Score, "^[1-2][1-2][1-2]") ~ "Hibernating",
+    TRUE ~ "Others"
+  ))
+ggplot(customer_rfm_score, aes(x = F_Score, y = M_Score, color = R_Score)) +
+  geom_point(alpha = 0.6, size = 3) +
+  labs(
+    title = "RFM Analysis of Customer Segments",
+    subtitle = "Frequency vs. Monetary with Recency",
+    x = "Frequency Score (1-5)",
+    y = "Monetary Score (1-5)",
+    color = "Recency Score (1-5)"
+  ) +
+  theme_minimal() +
+  scale_color_viridis_c()
+
+# 4. Market Basket Analysis
+
+### install.packages("arules")
+### install.packages("arulesViz")
+- library(arules)
+- library(arulesViz)
+
+transactions_list <- online_retail_clean %>%
+  group_by(InvoiceNo) %>%
+  summarize(items = list(unique(Description))) %>%
+  pull(items)
+
+transactions_arules <- as(transactions_list, "transactions")
+
+rules <- apriori(transactions_arules, parameter = list(support = 0.01, confidence = 0.5))
+inspect(head(sort(rules, by = "lift"), 10))
+
+
+### Plotting association rules
+top_rules <- head(sort(rules, by = "lift"), 100)
+plot(top_rules, method = "graph", engine = "htmlwidget")
+
+# 5. Dashboard Data Export
+
+dashboard_data <- online_retail_clean %>%
+  inner_join(customer_rfm_score, by = "CustomerID")
+
+write.csv(dashboard_data, "dashboard_data.csv", row.names = FALSE)
